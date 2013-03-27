@@ -23,7 +23,7 @@ public class SimpleClientHandler implements InvocationHandler {
     private final ConcurrentMap<Long, CountDownLatch> latches = new ConcurrentHashMap<Long, CountDownLatch>();
     private final ConcurrentMap<Long, Object> responses = new ConcurrentHashMap<Long, Object>();
 
-    public SimpleClientHandler(String id, final ObjectInputStream in, final ObjectOutputStream out) {
+    public SimpleClientHandler(final String id, final ObjectInputStream in, final ObjectOutputStream out) {
         this.in = in;
         this.out = out;
 
@@ -42,13 +42,14 @@ public class SimpleClientHandler implements InvocationHandler {
         // basic filtering
         final String methodName = method.getName();
         if (methodName.endsWith("NotificationListener") || "unregisterMBean".equals(methodName)) {
-            return null;
+            return null; // not yet supported
         }
-
         if ("createMBean".equals(methodName)) {
             throw new UnsupportedOperationException();
         }
 
+        // generate an id for the request, send the request "synchronizedly" to let the server get correct input by socket
+        // then wait the returned value
         final long currentId = id.incrementAndGet();
         final CountDownLatch latch = new CountDownLatch(1);
         latches.put(currentId, latch);
