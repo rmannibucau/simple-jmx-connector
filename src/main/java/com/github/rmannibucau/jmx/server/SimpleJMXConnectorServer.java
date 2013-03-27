@@ -16,7 +16,7 @@ public class SimpleJMXConnectorServer extends JMXConnectorServer {
     public SimpleJMXConnectorServer(final JMXServiceURL serviceURL, final Map<String, ?> environment, final MBeanServer mbeanServer) {
         super(mbeanServer);
         this.url = serviceURL;
-        this.server = new SimpleServer(url, environment, mbeanServer, Thread.currentThread().getContextClassLoader());
+        this.server = new SimpleServer(url, environment, this, Thread.currentThread().getContextClassLoader());
     }
 
     @Override

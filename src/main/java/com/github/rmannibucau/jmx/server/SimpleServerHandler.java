@@ -1,5 +1,6 @@
 package com.github.rmannibucau.jmx.server;
 
+import com.github.rmannibucau.jmx.server.security.JMXSubjetCombiner;
 import com.github.rmannibucau.jmx.shared.Request;
 import com.github.rmannibucau.jmx.shared.Response;
 
@@ -10,20 +11,23 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
-import java.io.OptionalDataException;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.Socket;
+import java.security.AccessControlContext;
+import java.security.AccessController;
+import java.security.PrivilegedAction;
 
 public class SimpleServerHandler implements Runnable {
     private final ObjectInputStream input;
     private final ObjectOutputStream output;
     private final Socket socket;
-    private final MBeanServer server;
-    private final Subject subject;
+    private final SimpleJMXConnectorServer server;
+    private final JMXSubjetCombiner jmxSubjetCombiner;
 
-    public SimpleServerHandler(final JMXAuthenticator authenticator, final MBeanServer mbeanServer, final Socket socket) {
+    public SimpleServerHandler(final JMXAuthenticator authenticator, final SimpleJMXConnectorServer mbeanServerProvider, final Socket socket) throws Exception {
         this.socket = socket;
-        this.server = mbeanServer;
+        this.server = mbeanServerProvider;
 
         try {
             input = new ObjectInputStream(socket.getInputStream());
@@ -32,36 +36,82 @@ public class SimpleServerHandler implements Runnable {
             throw new IllegalArgumentException(se);
         }
 
-        Subject s;
-        try {
-            final Object credentials = input.readObject();
-            if (authenticator != null) {
-                s = authenticator.authenticate(credentials);
-            } else {
-                s = null;
-            }
-        } catch (final OptionalDataException ode) {
-            s = null;
-        } catch (final Exception e) {
-            throw new IllegalArgumentException("Can't get credentials", e);
+        final Request credentials = Request.class.cast(input.readObject());
+        if (credentials.getId() != 0) {
+            throw new IllegalStateException("creadential id should be 0");
         }
-        subject = s;
+        if (authenticator != null) {
+            try {
+                final Subject subject = authenticator.authenticate(credentials.getParams()[0]);
+                jmxSubjetCombiner = new JMXSubjetCombiner(subject);
+            } catch (final Exception e) {
+                if (socket.isConnected()) {
+                    output.writeObject(new Response(0, true, e));
+                }
+                throw e;
+            }
+        } else {
+            jmxSubjetCombiner = null;
+        }
+        output.writeObject(new Response(0, false, null)); // ACK for credentials
     }
 
     @Override
     public void run() {
         try {
             while (true) {
-                final Request request = Request.class.cast(input.readObject());
-                final Method method = findMethod(request.getName(), request.paramNumber());
-                // TODO: bind subject
-                final Object result = method.invoke(server, request.getParams());
-                output.writeObject(new Response(request.getId(), result));
+                Throwable error = null;
+                Request request = null;
+                try {
+                    request = Request.class.cast(input.readObject());
+                } catch (final ClassNotFoundException e) {
+                    error = e;
+                }
+
+                Object result = null;
+                if (request != null) {
+                    final Method method = findMethod(request.getName(), request.paramNumber());
+                    final Object[] params = request.getParams();
+                    final MBeanServer mBeanServer = server.getMBeanServer();
+
+                    if (jmxSubjetCombiner != null) {
+                        try {
+                            result = AccessController.doPrivileged(new PrivilegedAction<Object>() {
+                                @Override
+                                public Object run() {
+                                    try {
+                                        return method.invoke(mBeanServer, params);
+                                    } catch (final IllegalAccessException e) {
+                                        throw new UnwrappableException(e);
+                                    } catch (final InvocationTargetException e) {
+                                        throw new UnwrappableException(e.getCause());
+                                    }
+                                }
+                            }, new AccessControlContext(AccessController.getContext(), jmxSubjetCombiner));
+                        } catch (final UnwrappableException re) {
+                            error = Exception.class.cast(re.getCause());
+                        }
+                    } else {
+                        try {
+                            result = method.invoke(mBeanServer, params);
+                        } catch (final IllegalAccessException e) {
+                            error = e;
+                        } catch (final InvocationTargetException e) {
+                            error = e.getCause();
+                        }
+                    }
+                } else{
+                    result = error;
+                }
+
+                if (error != null) {
+                    result = error;
+                }
+
+                output.writeObject(new Response(request.getId(), error != null, result));
             }
         } catch (final IOException end) {
             // no-op: communication end
-        } catch (final Exception e) {
-            e.printStackTrace();
         } finally {
             close(input);
             close(output);
@@ -92,5 +142,11 @@ public class SimpleServerHandler implements Runnable {
             }
         }
         throw new IllegalArgumentException("Method " + methodName + " not found with " + paramNumber + " parameters");
+    }
+
+    private static class UnwrappableException extends RuntimeException {
+        private UnwrappableException(final Throwable e) {
+            super(e);
+        }
     }
 }

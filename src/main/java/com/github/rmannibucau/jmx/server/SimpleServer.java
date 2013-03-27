@@ -1,6 +1,5 @@
 package com.github.rmannibucau.jmx.server;
 
-import javax.management.MBeanServer;
 import javax.management.remote.JMXAuthenticator;
 import javax.management.remote.JMXConnectorServer;
 import javax.management.remote.JMXServiceURL;
@@ -20,8 +19,8 @@ public class SimpleServer {
     private final ServerThread serverThread;
 
     public SimpleServer(final JMXServiceURL url, final Map<String, ?> envrt,
-                        final MBeanServer mbeanServer, final ClassLoader contextClassLoader) {
-        serverThread = new ServerThread(url, envrt, mbeanServer, contextClassLoader);
+                        final SimpleJMXConnectorServer server, final ClassLoader contextClassLoader) {
+        serverThread = new ServerThread(url, envrt, server, contextClassLoader);
         serverThread.setName("JMX Server");
     }
 
@@ -42,14 +41,14 @@ public class SimpleServer {
         private final JMXServiceURL url;
         private final ExecutorService es;
         private final JMXAuthenticator authenticator;
-        private final MBeanServer mbeanServer;
+        private final SimpleJMXConnectorServer mbeanServerProvider;
         private ServerSocket server;
 
         public ServerThread(final JMXServiceURL url, final Map<String, ?> envrt,
-                            final MBeanServer mbeanServer, final ClassLoader classloader) {
+                            final SimpleJMXConnectorServer mbeanServerProvider, final ClassLoader classloader) {
             this.url = url;
             this.environment = envrt;
-            this.mbeanServer = mbeanServer;
+            this.mbeanServerProvider = mbeanServerProvider;
             this.es = Executors.newFixedThreadPool(10, new ServletThreadFactory(classloader)); // TODO: handle config
             this.authenticator = JMXAuthenticator.class.cast(environment.get(JMXConnectorServer.AUTHENTICATOR));
         }
@@ -67,7 +66,11 @@ public class SimpleServer {
                     final Socket socket = server.accept();
                     if (!done.get() && !es.isShutdown()) {
                         //socket.setSoTimeout(soTimeout);
-                        es.submit(new SimpleServerHandler(authenticator, mbeanServer, socket));
+                        try {
+                            es.submit(new SimpleServerHandler(authenticator, mbeanServerProvider, socket));
+                        } catch (final Exception se) {
+                            socket.close();
+                        }
                     } else {
                         socket.close();
                     }

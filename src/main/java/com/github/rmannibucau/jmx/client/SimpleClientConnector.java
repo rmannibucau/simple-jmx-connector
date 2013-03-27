@@ -1,5 +1,8 @@
 package com.github.rmannibucau.jmx.client;
 
+import com.github.rmannibucau.jmx.shared.Request;
+import com.github.rmannibucau.jmx.shared.Response;
+
 import javax.management.ListenerNotFoundException;
 import javax.management.MBeanServerConnection;
 import javax.management.NotificationBroadcasterSupport;
@@ -13,6 +16,7 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.lang.reflect.Proxy;
 import java.net.Socket;
+import java.rmi.RemoteException;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
@@ -65,7 +69,19 @@ public class SimpleClientConnector implements JMXConnector {
         }
 
         final Object credentials = map.get(CREDENTIALS);
-        out.writeObject(credentials);
+        out.writeObject(new Request(0, null, new Object[] { credentials }));
+        try {
+            final Response response = Response.class.cast(in.readObject());
+            if (response.isException()) {
+                final Throwable cause = Throwable.class.cast(response.getValue());
+                if (RuntimeException.class.isInstance(cause)) {
+                    throw RuntimeException.class.cast(cause);
+                }
+                throw new IOException("Can't authenticate", cause);
+            }
+        } catch (final ClassNotFoundException e) {
+            throw new IOException(e);
+        }
     }
 
     @Override

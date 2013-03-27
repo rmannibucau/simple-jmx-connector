@@ -12,16 +12,17 @@ import java.lang.reflect.Method;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class SimpleClientHandler implements InvocationHandler {
-    private final AtomicLong id = new AtomicLong(0);
+    private final AtomicLong id = new AtomicLong(1); // 0 is the credential
     private final ObjectInputStream in;
     private final ObjectOutputStream out;
     private final AnswerReader answerReader;
     private final ConcurrentMap<Long, CountDownLatch> latches = new ConcurrentHashMap<Long, CountDownLatch>();
-    private final ConcurrentMap<Long, Object> responses = new ConcurrentHashMap<Long, Object>();
+    private final ConcurrentMap<Long, Response> responses = new ConcurrentHashMap<Long, Response>();
 
     public SimpleClientHandler(final String id, final ObjectInputStream in, final ObjectOutputStream out) {
         this.in = in;
@@ -56,8 +57,16 @@ public class SimpleClientHandler implements InvocationHandler {
         synchronized (out) {
             out.writeObject(new Request(currentId, methodName, args));
         }
-        latch.await();
-        return responses.remove(currentId);
+
+        // TODO: configure timeout
+        if (!latch.await(10, TimeUnit.SECONDS)) { // cleanup if time elapsed
+            latches.remove(currentId);
+        }
+        final Response response = responses.remove(currentId);
+        if (response != null && response.isException()) {
+            throw Throwable.class.cast(response.getValue());
+        }
+        return response.getValue();
     }
 
     public void forceStop() {
@@ -78,8 +87,11 @@ public class SimpleClientHandler implements InvocationHandler {
 
                 try {
                     final Response response = Response.class.cast(in.readObject());
-                    responses.putIfAbsent(response.getId(), response.getValue());
-                    latches.remove(response.getId()).countDown();
+                    final CountDownLatch latch = latches.remove(response.getId());
+                    if (latch != null) {
+                        responses.putIfAbsent(response.getId(), response);
+                        latch.countDown();
+                    }
                 } catch (final IOException e) {
                     break;
                 } catch (final ClassNotFoundException e) {
