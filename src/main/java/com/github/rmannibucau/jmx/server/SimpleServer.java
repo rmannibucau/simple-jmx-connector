@@ -14,8 +14,12 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class SimpleServer {
+    private static final Logger LOGGER = Logger.getLogger(SimpleServer.class.getName());
+
     private final ServerThread serverThread;
 
     public SimpleServer(final JMXServiceURL url, final Map<String, ?> envrt,
@@ -49,7 +53,13 @@ public class SimpleServer {
             this.url = url;
             this.environment = envrt;
             this.mbeanServerProvider = mbeanServerProvider;
-            this.es = Executors.newFixedThreadPool(10, new ServletThreadFactory(classloader)); // TODO: handle config
+
+            int poolSize = 10;
+            if (envrt.containsKey("poolSize")) {
+                poolSize =  Number.class.cast(envrt.get("poolSize")).intValue();
+            }
+
+            this.es = Executors.newFixedThreadPool(poolSize, new ServletThreadFactory(classloader));
             this.authenticator = JMXAuthenticator.class.cast(environment.get(JMXConnectorServer.AUTHENTICATOR));
         }
 
@@ -58,7 +68,7 @@ public class SimpleServer {
             try {
                 server = new ServerSocket(url.getPort());
             } catch (final IOException e) {
-                throw new RuntimeException(e);
+                throw new JMXServerException(e);
             }
 
             while (!done.get()) {
@@ -75,9 +85,14 @@ public class SimpleServer {
                         socket.close();
                     }
                 } catch (final IOException e) {
-                    e.printStackTrace();
+                    if (server.isClosed()) {
+                        throw new JMXServerException(e);
+                    }
                 } catch (final RejectedExecutionException ree) {
-                    ree.printStackTrace();
+                    if (server.isClosed()) {
+                        throw new JMXServerException(ree);
+                    }
+                    LOGGER.log(Level.WARNING, "Too much connections", ree);
                 }
             }
         }

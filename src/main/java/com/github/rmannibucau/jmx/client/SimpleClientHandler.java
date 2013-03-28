@@ -23,10 +23,12 @@ public class SimpleClientHandler implements InvocationHandler {
     private final AnswerReader answerReader;
     private final ConcurrentMap<Long, CountDownLatch> latches = new ConcurrentHashMap<Long, CountDownLatch>();
     private final ConcurrentMap<Long, Response> responses = new ConcurrentHashMap<Long, Response>();
+    private final long timeout;
 
-    public SimpleClientHandler(final String id, final ObjectInputStream in, final ObjectOutputStream out) {
+    public SimpleClientHandler(final String id, long responseTimeout, final ObjectInputStream in, final ObjectOutputStream out) {
         this.in = in;
         this.out = out;
+        this.timeout = responseTimeout;
 
         answerReader = new AnswerReader();
         answerReader.setName("Answer Reader #" + id);
@@ -58,10 +60,14 @@ public class SimpleClientHandler implements InvocationHandler {
             out.writeObject(new Request(currentId, methodName, args));
         }
 
-        // TODO: configure timeout
-        if (!latch.await(10, TimeUnit.SECONDS)) { // cleanup if time elapsed
-            latches.remove(currentId);
+        if (timeout > 0) {
+            if (!latch.await(timeout, TimeUnit.SECONDS)) { // cleanup if time elapsed
+                latches.remove(currentId);
+            }
+        } else {
+            latch.await();
         }
+
         final Response response = responses.remove(currentId);
         if (response != null && response.isException()) {
             throw Throwable.class.cast(response.getValue());

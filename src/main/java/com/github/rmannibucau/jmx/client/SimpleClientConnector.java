@@ -31,6 +31,7 @@ public class SimpleClientConnector implements JMXConnector {
     private Socket socket;
     private ObjectInputStream in;
     private ObjectOutputStream out;
+    private long responseTimeout = 10;
 
     public SimpleClientConnector(final JMXServiceURL serviceURL, final Map<String, ?> environment) {
         this.url = serviceURL;
@@ -82,6 +83,10 @@ public class SimpleClientConnector implements JMXConnector {
         } catch (final ClassNotFoundException e) {
             throw new IOException(e);
         }
+
+        if (envrt.containsKey("responseTimeout")) {
+            responseTimeout = Number.class.cast(envrt.get("responseTimeout")).longValue();
+        }
     }
 
     @Override
@@ -91,7 +96,7 @@ public class SimpleClientConnector implements JMXConnector {
 
     @Override
     public MBeanServerConnection getMBeanServerConnection(final Subject delegationSubject) throws IOException {
-        final SimpleClientHandler handler = new SimpleClientHandler(id, in, out);
+        final SimpleClientHandler handler = new SimpleClientHandler(id, responseTimeout, in, out);
         handlers.add(handler);
         return MBeanServerConnection.class.cast(Proxy.newProxyInstance(
                 Thread.currentThread().getContextClassLoader(), new Class<?>[] { MBeanServerConnection.class }, handler));
